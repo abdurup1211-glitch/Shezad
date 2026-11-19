@@ -109,8 +109,7 @@ class DefaultWakeWordManager(
   }
 
   override fun onKeywordMatched(phrase: String, confidence: Float): Boolean {
-    val normalized = phrase.trim()
-    if (!normalized.equals(config.wakePhrase, ignoreCase = true)) {
+    if (!matchesWakePhrase(phrase)) {
       return false
     }
     if (confidence < config.sensitivity) {
@@ -124,6 +123,22 @@ class DefaultWakeWordManager(
       runCatching { listener.onWakeWordDetected(config.wakePhrase, confidence) }
     }
     return true
+  }
+
+  private fun matchesWakePhrase(rawPhrase: String): Boolean {
+    val cleaned =
+      rawPhrase
+        .trim()
+        .replace(Regex("[!?,।.:;\"'()]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .lowercase()
+    if (cleaned.isEmpty()) return false
+    if (cleaned == config.wakePhrase.lowercase() || cleaned in config.aliases) {
+      return true
+    }
+    val tokens = cleaned.split(' ')
+    return tokens.any { it == "max" || it == "ম্যাক্স" }
   }
 
   override fun disarm() {

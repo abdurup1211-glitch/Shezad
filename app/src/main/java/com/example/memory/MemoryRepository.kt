@@ -69,10 +69,17 @@ class LocalMemoryRepository(
 
   override fun upsert(entry: MemoryModel) {
     _entries.update { current ->
-      val updated = listOf(entry) + current.filterNot { it.key.equals(entry.key, ignoreCase = true) }
+      val merged = listOf(entry) + current.filterNot { it.key.equals(entry.key, ignoreCase = true) }
+      val pinned = merged.filter { it.isPinned }
+      val unpinned = merged.filterNot { it.isPinned }.take((MAX_MEMORY_ENTRIES - pinned.size).coerceAtLeast(0))
+      val updated = (pinned + unpinned).sortedByDescending { it.updatedAtMillis }
       persistAsync(updated)
       updated
     }
+  }
+
+  companion object {
+    private const val MAX_MEMORY_ENTRIES = 200
   }
 
   override fun find(query: String): List<MemoryModel> {

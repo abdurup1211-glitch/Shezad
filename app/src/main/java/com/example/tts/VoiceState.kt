@@ -11,6 +11,7 @@ sealed class VoiceState {
   data class Ready(
     val activeLocaleTag: String,
     val usingFallbackVoice: Boolean = false,
+    val selectedVoiceName: String = "",
   ) : VoiceState()
 
   data class Speaking(

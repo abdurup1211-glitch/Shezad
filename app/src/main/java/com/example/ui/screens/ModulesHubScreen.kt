@@ -51,7 +51,7 @@ fun ModulesHubScreen(
         color = MaterialTheme.colorScheme.onBackground,
       )
       Text(
-        text = "All 20 MAX architectural packages decoupled behind independent interfaces.",
+        text = "All ${data.coreState.modules.size} MAX modular subsystems decoupled behind independent interfaces.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

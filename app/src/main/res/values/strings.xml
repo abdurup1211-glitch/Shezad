@@ -31,4 +31,7 @@
     <string name="empty_memory_subtitle">Add a structured preference or context note to verify MemoryManager storage and recall.</string>
     <string name="empty_logs_title">No Diagnostic Events</string>
     <string name="empty_logs_subtitle">ErrorLogger is armed and monitoring all MAX Core subsystems cleanly.</string>
+    <string name="overlay_title_max">MAX</string>
+    <string name="overlay_action_voice">Voice</string>
+    <string name="overlay_action_close">×</string>
 </resources>

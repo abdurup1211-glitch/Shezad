@@ -6,6 +6,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.apps.AppState
 import com.example.apps.SupportedExternalApp
+import com.example.automation.DailyBriefing
+import com.example.automation.MaxRoutine
+import com.example.automation.RoutineType
+import com.example.automation.ScheduledTask
+import com.example.brain.AIBrainState
 import com.example.camera.CameraActionOutcome
 import com.example.camera.CameraMode
 import com.example.conversation.ConversationMessage
@@ -17,6 +22,7 @@ import com.example.internet.InternetActionOutcome
 import com.example.internet.SearchVertical
 import com.example.memory.MemoryCategory
 import com.example.memory.MemoryEntry
+import com.example.overlay.FloatingAssistantState
 import com.example.permissions.AssistantPermission
 import com.example.permissions.PermissionState
 import com.example.repository.MaxSystemRepository
@@ -25,6 +31,7 @@ import com.example.settings.ThemeMode
 import com.example.smart.MaxReminder
 import com.example.speech.SpeechState
 import com.example.tts.TtsState
+import com.example.update.UpdateCheckState
 import com.example.utils.ErrorLogEntry
 import com.example.utils.LogSeverity
 import com.example.utils.ModuleCategory
@@ -89,6 +96,13 @@ data class MaxDashboardData(
   val logs: List<ErrorLogEntry> = emptyList(),
   val reminders: List<MaxReminder> = emptyList(),
   val smartSuggestions: List<String> = emptyList(),
+  val brainState: AIBrainState = AIBrainState.Idle,
+  val routines: List<MaxRoutine> = emptyList(),
+  val scheduledTasks: List<ScheduledTask> = emptyList(),
+  val latestBriefing: DailyBriefing? = null,
+  val floatingAssistantState: FloatingAssistantState = FloatingAssistantState(),
+  val updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
+  val currentVersionLabel: String = "MAX v1.0",
   val assistantStatus: AssistantStatus = AssistantStatus.WAITING,
   val lastCompletedTask: String = "MAX Core initialized with Privacy Shield active",
   val lastCompletedTaskAtMillis: Long = System.currentTimeMillis(),
@@ -167,13 +181,23 @@ class MaxViewModel(
         DataTuple(tts, memories, transcript, emotion, logs)
       },
       combine(
+        repository.routines,
+        repository.scheduledTasks,
+        repository.latestBriefing,
+        repository.floatingAssistantState,
+        repository.updateCheckState,
+      ) { routines, scheduledTasks, latestBriefing, floatingState, updateState ->
+        AutomationTuple(routines, scheduledTasks, latestBriefing, floatingState, updateState)
+      },
+      combine(
         repository.conversationState,
         repository.reminders,
+        repository.brainState,
         filterPreferences,
-      ) { convState, reminders, filters ->
-        ExtraTuple(convState, reminders, filters)
+      ) { convState, reminders, brainState, filters ->
+        ExtraTuple(convState, reminders, brainState, filters)
       },
-    ) { coreVoice, dataTuple, extraTuple ->
+    ) { coreVoice, dataTuple, automationTuple, extraTuple ->
       if (coreVoice.core.lifecycle == MaxLifecycleState.ERROR) {
         MaxScreenState.Error(coreVoice.core.statusMessage)
       } else {
@@ -192,6 +216,13 @@ class MaxViewModel(
             logs = dataTuple.logs,
             reminders = extraTuple.reminders,
             smartSuggestions = cachedSuggestions,
+            brainState = extraTuple.brainState,
+            routines = automationTuple.routines,
+            scheduledTasks = automationTuple.scheduledTasks,
+            latestBriefing = automationTuple.latestBriefing,
+            floatingAssistantState = automationTuple.floatingState,
+            updateCheckState = automationTuple.updateState,
+            currentVersionLabel = repository.currentVersionSummary(),
             assistantStatus = extraTuple.filters.assistantStatus,
             lastCompletedTask = extraTuple.filters.lastCompletedTask,
             lastCompletedTaskAtMillis = extraTuple.filters.lastCompletedTaskAtMillis,
@@ -260,12 +291,30 @@ class MaxViewModel(
     if (clean.isEmpty()) return
     filterPreferences.value = filterPreferences.value.copy(assistantStatus = AssistantStatus.THINKING)
     val reply = repository.submitUserCommand(clean)
+    val nextStatus =
+      when (repository.brainState.value) {
+        is AIBrainState.AwaitingInternetConsent,
+        is AIBrainState.AwaitingClarification -> AssistantStatus.LISTENING
+        else -> AssistantStatus.SPEAKING
+      }
     filterPreferences.value =
       filterPreferences.value.copy(
-        assistantStatus = AssistantStatus.SPEAKING,
+        assistantStatus = nextStatus,
         lastCompletedTask = reply.ifBlank { "Processed '$clean'" },
         lastCompletedTaskAtMillis = System.currentTimeMillis(),
         feedbackBanner = reply.take(90),
+      )
+  }
+
+  fun confirmBrainInternetConsent(allowed: Boolean) {
+    filterPreferences.value = filterPreferences.value.copy(assistantStatus = AssistantStatus.THINKING)
+    val response = repository.confirmBrainInternetConsent(allowed)
+    filterPreferences.value =
+      filterPreferences.value.copy(
+        assistantStatus = AssistantStatus.SPEAKING,
+        lastCompletedTask = response.replyText.ifBlank { "Processed internet consent" },
+        lastCompletedTaskAtMillis = System.currentTimeMillis(),
+        feedbackBanner = response.replyText.take(90),
       )
   }
 
@@ -478,6 +527,92 @@ class MaxViewModel(
     }
   }
 
+  fun setDynamicColorEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      repository.setDynamicColorEnabled(enabled)
+      recordCompletedTask(if (enabled) "Enabled Material You dynamic color" else "Using classic MAX cobalt-violet palette")
+    }
+  }
+
+  fun setFloatingBubbleEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      repository.setFloatingBubbleEnabled(enabled)
+      recordCompletedTask(if (enabled) "Enabled MAX floating assistant bubble" else "Hidden floating assistant bubble")
+    }
+  }
+
+  fun runRoutine(type: RoutineType) {
+    val summary = repository.runRoutine(type)
+    recordCompletedTask(summary.lineSequence().firstOrNull() ?: type.label)
+    setFeedback(summary.take(90))
+  }
+
+  fun triggerDailyBriefing() {
+    val briefing = repository.generateDailyBriefing()
+    recordCompletedTask(briefing.summaryBangla)
+    setFeedback(briefing.summaryBangla.take(90))
+  }
+
+  fun scheduleTask(title: String, whenLabel: String) {
+    if (title.isBlank()) return
+    val task = repository.scheduleTask(title, whenLabel)
+    recordCompletedTask("Scheduled '${task.title}' for ${task.scheduledTimeLabel}")
+    setFeedback("Task '${task.title}' scheduled.")
+  }
+
+  fun toggleScheduledTask(id: String) {
+    repository.toggleScheduledTask(id)
+  }
+
+  fun toggleFloatingBubbleMode() {
+    repository.toggleFloatingBubbleMode()
+  }
+
+  fun requestSystemOverlayEnable() {
+    val started = repository.startSystemOverlayIfPermitted()
+    if (!started) {
+      val settingsIntent = repository.buildOverlayPermissionSettingsIntent()
+      filterPreferences.value =
+        filterPreferences.value.copy(
+          pendingConfirmation =
+            PendingConfirmationAction(
+              title = "System Floating Overlay Permission",
+              description = "অন্য অ্যাপের ওপর ফ্লোটিং বাবল চালাতে 'Display over other apps' অনুমতি দিন, অথবা ইন-অ্যাপ ফ্লোটিং বাবল ব্যবহার করুন।",
+              intent = settingsIntent,
+            ),
+        )
+    } else {
+      recordCompletedTask("Enabled system-wide MAX floating bubble")
+      setFeedback("Floating overlay bubble active.")
+    }
+  }
+
+  fun checkForAppUpdates(explicitConsent: Boolean = true) {
+    viewModelScope.launch {
+      val result = repository.checkForAppUpdates(explicitConsent)
+      when (result) {
+        is UpdateCheckState.UpToDate -> {
+          recordCompletedTask("Verified ${repository.currentVersionSummary()} is up to date")
+          setFeedback("MAX ${result.currentVersionName} is up to date.")
+        }
+        is UpdateCheckState.UpdateAvailable -> {
+          recordCompletedTask("Update v${result.latestVersionName} available")
+          filterPreferences.value =
+            filterPreferences.value.copy(
+              pendingConfirmation =
+                PendingConfirmationAction(
+                  title = "Update Available (v${result.latestVersionName})",
+                  description = result.releaseNotes,
+                  intent = repository.buildReleasePageIntent(result.releasePageUrl),
+                ),
+            )
+        }
+        is UpdateCheckState.Error -> setFeedback(result.friendlyMessage.take(90))
+        else -> Unit
+      }
+    }
+  }
+
   fun resetSettings() {
     viewModelScope.launch {
       repository.resetSettings()
@@ -528,9 +663,18 @@ class MaxViewModel(
     val logs: List<ErrorLogEntry>,
   )
 
+  private data class AutomationTuple(
+    val routines: List<MaxRoutine>,
+    val scheduledTasks: List<ScheduledTask>,
+    val latestBriefing: DailyBriefing?,
+    val floatingState: FloatingAssistantState,
+    val updateState: UpdateCheckState,
+  )
+
   private data class ExtraTuple(
     val convState: ConversationState,
     val reminders: List<MaxReminder>,
+    val brainState: AIBrainState,
     val filters: FilterPreferences,
   )
 

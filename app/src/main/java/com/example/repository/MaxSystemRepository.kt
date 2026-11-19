@@ -3,6 +3,12 @@ package com.example.repository
 import android.content.Intent
 import com.example.apps.AppState
 import com.example.apps.SupportedExternalApp
+import com.example.automation.DailyBriefing
+import com.example.automation.MaxRoutine
+import com.example.automation.RoutineType
+import com.example.automation.ScheduledTask
+import com.example.brain.AIBrainState
+import com.example.brain.BrainResponse
 import com.example.camera.CameraActionOutcome
 import com.example.camera.CameraMode
 import com.example.conversation.ConversationMessage
@@ -14,6 +20,7 @@ import com.example.internet.InternetActionOutcome
 import com.example.internet.SearchVertical
 import com.example.memory.MemoryCategory
 import com.example.memory.MemoryEntry
+import com.example.overlay.FloatingAssistantState
 import com.example.permissions.AssistantPermission
 import com.example.permissions.PermissionState
 import com.example.phone.PhoneState
@@ -24,6 +31,7 @@ import com.example.smart.SmartFeatureState
 import com.example.speech.SpeechState
 import com.example.tts.SpeechStyle
 import com.example.tts.TtsState
+import com.example.update.UpdateCheckState
 import com.example.utils.ErrorLogEntry
 import com.example.utils.LogSeverity
 import com.example.wakeword.WakeWordState
@@ -49,6 +57,12 @@ class MaxSystemRepository(
   val logs: StateFlow<List<ErrorLogEntry>> = maxCore.errorLogger.logs
   val reminders: StateFlow<List<MaxReminder>> = maxCore.smartFeatureManager.reminderManager.reminders
   val smartState: StateFlow<SmartFeatureState> = maxCore.smartFeatureManager.state
+  val brainState: StateFlow<AIBrainState> = maxCore.aiBrainManager.brainState
+  val routines: StateFlow<List<MaxRoutine>> = maxCore.automationManager.routines
+  val scheduledTasks: StateFlow<List<ScheduledTask>> = maxCore.automationManager.scheduledTasks
+  val latestBriefing: StateFlow<DailyBriefing?> = maxCore.automationManager.latestBriefing
+  val floatingAssistantState: StateFlow<FloatingAssistantState> = maxCore.floatingAssistantController.state
+  val updateCheckState: StateFlow<UpdateCheckState> = maxCore.appUpdateChecker.state
 
   fun runDiagnostics(): MaxCoreState = maxCore.runDiagnostics()
 
@@ -64,6 +78,12 @@ class MaxSystemRepository(
 
   fun submitUserCommand(command: String): String =
     maxCore.processUserCommand(command = command, explicitUserRequest = true)
+
+  fun confirmBrainInternetConsent(allowed: Boolean): BrainResponse {
+    val response = maxCore.aiBrainManager.confirmPendingInternetAccess(allowed)
+    maxCore.refreshRegistry()
+    return response
+  }
 
   fun concludeConversation() {
     maxCore.conversationManager.concludeSession(speakFarewell = settings.value.ttsEnabled)
@@ -141,6 +161,77 @@ class MaxSystemRepository(
   suspend fun setThemeMode(mode: ThemeMode) {
     maxCore.settingsManager.setThemeMode(mode)
   }
+
+  suspend fun setDynamicColorEnabled(enabled: Boolean) {
+    maxCore.settingsManager.setDynamicColorEnabled(enabled)
+  }
+
+  suspend fun setFloatingBubbleEnabled(enabled: Boolean) {
+    maxCore.settingsManager.setFloatingBubbleEnabled(enabled)
+    if (enabled) {
+      maxCore.floatingAssistantController.showMinimizedBubble()
+    } else {
+      maxCore.floatingAssistantController.hideBubble()
+    }
+    maxCore.refreshRegistry()
+  }
+
+  fun runRoutine(type: RoutineType): String {
+    val summary = maxCore.automationManager.runRoutineByType(type)
+    if (settings.value.ttsEnabled) {
+      maxCore.ttsManager.speak(summary, SpeechStyle.FRIENDLY)
+    }
+    maxCore.refreshRegistry()
+    return summary
+  }
+
+  fun generateDailyBriefing(): DailyBriefing {
+    val briefing = maxCore.automationManager.generateDailyBriefing()
+    if (settings.value.ttsEnabled) {
+      maxCore.ttsManager.speak(briefing.summaryBangla, SpeechStyle.CALM)
+    }
+    maxCore.refreshRegistry()
+    return briefing
+  }
+
+  fun scheduleTask(title: String, whenLabel: String): ScheduledTask {
+    val task = maxCore.automationManager.scheduleTask(title, whenLabel)
+    maxCore.refreshRegistry()
+    return task
+  }
+
+  fun toggleScheduledTask(id: String) {
+    maxCore.automationManager.toggleTaskCompleted(id)
+  }
+
+  fun addCustomRoutine(title: String, trigger: String, steps: List<String>, timeLabel: String): MaxRoutine =
+    maxCore.automationManager.addCustomRoutine(title, trigger, steps, timeLabel)
+
+  fun toggleRoutineEnabled(id: String) {
+    maxCore.automationManager.toggleRoutineEnabled(id)
+  }
+
+  fun toggleFloatingBubbleMode() {
+    maxCore.floatingAssistantController.toggleMinimizeRestore()
+  }
+
+  fun startSystemOverlayIfPermitted(): Boolean =
+    maxCore.floatingAssistantController.startSystemOverlayIfPermitted(explicitUserRequest = true)
+
+  fun stopSystemOverlay() {
+    maxCore.floatingAssistantController.stopSystemOverlay()
+  }
+
+  fun buildOverlayPermissionSettingsIntent(): Intent? =
+    maxCore.floatingAssistantController.buildOverlayPermissionSettingsIntent()
+
+  suspend fun checkForAppUpdates(explicitConsent: Boolean): UpdateCheckState =
+    maxCore.appUpdateChecker.checkForUpdates(explicitUserConsent = explicitConsent)
+
+  fun currentVersionSummary(): String = maxCore.appUpdateChecker.currentVersionSummary()
+
+  fun buildReleasePageIntent(url: String): Intent? =
+    maxCore.appUpdateChecker.buildOpenReleasePageIntent(url)
 
   suspend fun resetSettings() {
     maxCore.settingsManager.resetToDefaults()

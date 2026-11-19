@@ -2,6 +2,7 @@
 -keep class com.example.MaxApplication { *; }
 -keep class com.example.MainActivity { *; }
 -keep class com.example.service.MaxAssistantService { *; }
+-keep class com.example.overlay.FloatingOverlayService { *; }
 
 # Preserve Kotlin metadata and Coroutines internals cleanly.
 -keepattributes Signature,InnerClasses,EnclosingMethod

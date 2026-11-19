@@ -30,7 +30,7 @@ interface ConversationManager : MaxModule {
 
   fun onWakeWordActivated(speakGreeting: Boolean = true)
 
-  fun handleUserInput(input: String, responseOverride: String? = null)
+  fun handleUserInput(input: String, responseOverride: String? = null, speakReply: Boolean = true)
 
   fun completeTaskAndAskFollowUp(taskSummary: String, speakPrompt: Boolean = true)
 
@@ -88,7 +88,7 @@ class DefaultConversationManager(
     errorLogger.logInfo("ConversationManager", "Greeted Sanju and transitioned to ListeningForCommand.")
   }
 
-  override fun handleUserInput(input: String, responseOverride: String?) {
+  override fun handleUserInput(input: String, responseOverride: String?, speakReply: Boolean) {
     cancelWaitTimer()
     val trimmed = input.trim()
     if (trimmed.isEmpty()) return
@@ -104,7 +104,9 @@ class DefaultConversationManager(
           coreMessage = "আমি আপনার কথাটি বুঝেছি, সানজু।",
         )
     appendMessage(SenderRole.MAX_CORE, reply, style.emotion)
-    ttsManager.speak(reply, style.speechStyle)
+    if (speakReply) {
+      ttsManager.speak(reply, style.speechStyle)
+    }
   }
 
   override fun completeTaskAndAskFollowUp(taskSummary: String, speakPrompt: Boolean) {

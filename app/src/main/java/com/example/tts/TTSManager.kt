@@ -78,8 +78,9 @@ class AndroidTTSManager(
 ) : TTSManager {
 
   private var textToSpeech: TextToSpeech? = null
-  private val pendingQueue = ArrayDeque<String>()
+  private val pendingQueue = ArrayDeque<Pair<String, Boolean>>()
   private var currentSentence: String = ""
+  private var selectedVoiceLabel: String = ""
   private var isPaused: Boolean = false
 
   private val _state = MutableStateFlow<TtsState>(TtsState.Uninitialized)
@@ -129,7 +130,7 @@ class AndroidTTSManager(
           if (status == TextToSpeech.SUCCESS) {
             val engine = textToSpeech
             val (selectedLocale, usingFallback) = selectBestBanglaOrFallbackLocale(engine)
-            selectBestNaturalVoice(engine, selectedLocale)
+            selectedVoiceLabel = selectBestNaturalVoice(engine, selectedLocale)
             applyVoiceParameters(_voiceConfig.value.style)
             attachProgressListener()
 
@@ -139,10 +140,11 @@ class AndroidTTSManager(
                 VoiceState.Ready(
                   activeLocaleTag = selectedLocale.toLanguageTag(),
                   usingFallbackVoice = usingFallback,
+                  selectedVoiceName = selectedVoiceLabel,
                 )
               errorLogger.logInfo(
                 "TTSManager",
-                "Natural TTS ready (locale=${selectedLocale.toLanguageTag()}, fallback=$usingFallback).",
+                "Natural TTS ready (locale=${selectedLocale.toLanguageTag()}, voice=${selectedVoiceLabel.ifBlank { "default" }}, fallback=$usingFallback).",
               )
             } else {
               _state.value = TtsState.Disabled
@@ -172,11 +174,12 @@ class AndroidTTSManager(
     if (text.isBlank()) return
 
     _voiceConfig.value = _voiceConfig.value.copy(style = style)
-    val sentences = splitIntoNaturalSentences(text)
-    if (sentences.isEmpty()) return
+    val naturalText = sanitizeForSpeech(text)
+    val chunks = splitIntoNaturalChunks(naturalText)
+    if (chunks.isEmpty()) return
 
     pendingQueue.clear()
-    pendingQueue.addAll(sentences)
+    pendingQueue.addAll(chunks)
     isPaused = false
 
     val engine = textToSpeech
@@ -201,6 +204,7 @@ class AndroidTTSManager(
         VoiceState.Ready(
           activeLocaleTag = _voiceConfig.value.primaryLocale.toLanguageTag(),
           usingFallbackVoice = false,
+          selectedVoiceName = selectedVoiceLabel,
         )
     }
   }
@@ -212,7 +216,7 @@ class AndroidTTSManager(
     val remaining =
       buildList {
         if (currentSentence.isNotBlank()) add(currentSentence)
-        addAll(pendingQueue)
+        pendingQueue.forEach { add(it.first) }
       }
     _voiceState.value = VoiceState.Paused(remainingSentences = remaining)
     _state.value = TtsState.Ready
@@ -223,7 +227,7 @@ class AndroidTTSManager(
     val engine = textToSpeech ?: return
     isPaused = false
     pendingQueue.clear()
-    pendingQueue.addAll(paused.remainingSentences)
+    paused.remainingSentences.forEach { pendingQueue.add(it to true) }
     speakNextSentence(engine, _voiceConfig.value.style)
   }
 
@@ -246,9 +250,14 @@ class AndroidTTSManager(
     val fallback =
       result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED
     if (!fallback) {
-      selectBestNaturalVoice(engine, locale)
+      selectedVoiceLabel = selectBestNaturalVoice(engine, locale)
     }
-    _voiceState.value = VoiceState.Ready(locale.toLanguageTag(), usingFallbackVoice = fallback)
+    _voiceState.value =
+      VoiceState.Ready(
+        activeLocaleTag = locale.toLanguageTag(),
+        usingFallbackVoice = fallback,
+        selectedVoiceName = selectedVoiceLabel,
+      )
   }
 
   override fun shutdown() {
@@ -267,23 +276,31 @@ class AndroidTTSManager(
 
   private fun speakNextSentence(engine: TextToSpeech, style: SpeechStyle) {
     if (isPaused) return
-    val next = pendingQueue.removeFirstOrNull()
-    if (next == null) {
+    val nextEntry = pendingQueue.removeFirstOrNull()
+    if (nextEntry == null) {
       currentSentence = ""
       _state.value = TtsState.Ready
-      _voiceState.value = VoiceState.Ready(_voiceConfig.value.primaryLocale.toLanguageTag(), false)
+      _voiceState.value =
+        VoiceState.Ready(
+          activeLocaleTag = _voiceConfig.value.primaryLocale.toLanguageTag(),
+          usingFallbackVoice = false,
+          selectedVoiceName = selectedVoiceLabel,
+        )
       return
     }
 
-    currentSentence = next
+    val (nextText, isSentenceEnd) = nextEntry
+    currentSentence = nextText
     _state.value = TtsState.Speaking
-    _voiceState.value = VoiceState.Speaking(currentSentence = next, style = style)
+    _voiceState.value = VoiceState.Speaking(currentSentence = nextText, style = style)
 
     runCatching {
-      engine.speak(next, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+      engine.speak(nextText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
       if (pendingQueue.isNotEmpty()) {
+        val pauseDuration =
+          if (isSentenceEnd) style.sentencePauseMillis else style.clausePauseMillis
         engine.playSilentUtterance(
-          style.sentencePauseMillis,
+          pauseDuration,
           TextToSpeech.QUEUE_ADD,
           "pause_${UUID.randomUUID()}",
         )
@@ -306,23 +323,31 @@ class AndroidTTSManager(
     return cfg.fallbackLocale to true
   }
 
-  private fun selectBestNaturalVoice(engine: TextToSpeech?, locale: Locale) {
-    if (engine == null) return
-    runCatching {
+  private fun selectBestNaturalVoice(engine: TextToSpeech?, locale: Locale): String {
+    if (engine == null) return ""
+    return runCatching {
       val voices = engine.voices.orEmpty()
       val bestVoice: Voice? =
         voices
-          .filter { it.locale.language == locale.language }
+          .filter { it.locale.language.equals(locale.language, ignoreCase = true) }
           .sortedWith(
-            compareByDescending<Voice> { it.quality }
-              .thenBy { it.latency }
-              .thenBy { it.isNetworkConnectionRequired },
+            compareByDescending<Voice> { it.locale.country.equals("BD", ignoreCase = true) }
+              .thenByDescending { it.quality }
+              .thenBy { it.isNetworkConnectionRequired }
+              .thenByDescending {
+                val lower = it.name.lowercase(Locale.US)
+                lower.contains("neural") || lower.contains("wavenet") || lower.contains("x-")
+              }
+              .thenBy { it.latency },
           )
           .firstOrNull()
       if (bestVoice != null) {
         engine.voice = bestVoice
+        bestVoice.name
+      } else {
+        ""
       }
-    }
+    }.getOrDefault("")
   }
 
   private fun applyVoiceParameters(style: SpeechStyle) {
@@ -353,7 +378,11 @@ class AndroidTTSManager(
             currentSentence = ""
             _state.value = TtsState.Ready
             _voiceState.value =
-              VoiceState.Ready(_voiceConfig.value.primaryLocale.toLanguageTag(), false)
+              VoiceState.Ready(
+                activeLocaleTag = _voiceConfig.value.primaryLocale.toLanguageTag(),
+                usingFallbackVoice = false,
+                selectedVoiceName = selectedVoiceLabel,
+              )
           }
         }
 
@@ -366,9 +395,33 @@ class AndroidTTSManager(
     )
   }
 
-  private fun splitIntoNaturalSentences(text: String): List<String> =
-    text
-      .split(Regex("(?<=[।.!?\\n])\\s+"))
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
+  private fun splitIntoNaturalChunks(text: String): List<Pair<String, Boolean>> {
+    val sentences =
+      text
+        .split(Regex("(?<=[।.!?\\n])\\s+"))
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+    val result = mutableListOf<Pair<String, Boolean>>()
+    for (sentence in sentences) {
+      val clauses =
+        sentence
+          .split(Regex("(?<=[,;—])\\s+"))
+          .map { it.trim() }
+          .filter { it.isNotEmpty() }
+      clauses.forEachIndexed { index, clause ->
+        val isSentenceEnd = index == clauses.lastIndex
+        result.add(clause to isSentenceEnd)
+      }
+    }
+    return result
+  }
+
+  private fun sanitizeForSpeech(rawText: String): String =
+    rawText
+      .replace(Regex("https?://\\S+"), "লিংক তৈরি হয়েছে")
+      .replace(Regex("[*_`#]+"), "")
+      .replace("•", ",")
+      .replace(Regex("\\s+"), " ")
+      .trim()
 }

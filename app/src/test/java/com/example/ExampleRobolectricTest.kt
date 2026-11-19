@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.apps.AppState
 import com.example.apps.SupportedExternalApp
+import com.example.brain.AIBrainState
 import com.example.conversation.ConversationState
 import com.example.core.MaxContainer
 import com.example.core.MaxLifecycleState
@@ -105,5 +106,167 @@ class ExampleRobolectricTest {
 
     container.memoryManager.saveMemory("Name", "Sanju", MemoryCategory.FACT)
     assertTrue(container.memoryManager.recallMemories("Sanju").isNotEmpty())
+  }
+
+  @Test
+  fun `AI Brain handles follow-up questions and offline capability without internet`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    // Capability question should stay strictly offline
+    val helpResponse = container.aiBrainManager.thinkAndRespond("তুমি কী করতে পারো?", speakReply = false)
+    assertTrue(!helpResponse.usedInternet)
+    assertTrue(!helpResponse.awaitingConsent)
+    assertTrue(helpResponse.replyText.contains("MAX"))
+
+    // Missing-slot follow-up flow: ask for translation text -> clarify -> complete offline
+    val askMissing = container.aiBrainManager.thinkAndRespond("অনুবাদ করো", speakReply = false)
+    assertTrue(askMissing.awaitingClarification)
+    assertTrue(container.aiBrainManager.brainState.value is AIBrainState.AwaitingClarification)
+
+    val completedTranslation = container.aiBrainManager.thinkAndRespond("কেমন আছেন", speakReply = false)
+    assertTrue(!completedTranslation.usedInternet)
+    assertTrue(completedTranslation.replyText.contains("How are you?"))
+  }
+
+  @Test
+  fun `AI Brain requires explicit internet consent before searching online`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    // Asking about weather triggers internet permission prompt instead of opening internet directly
+    val consentPrompt = container.aiBrainManager.thinkAndRespond("ঢাকার আবহাওয়া কেমন?", speakReply = false)
+    assertTrue(consentPrompt.awaitingConsent)
+    assertTrue(!consentPrompt.usedInternet)
+    assertTrue(container.aiBrainManager.brainState.value is AIBrainState.AwaitingInternetConsent)
+
+    // Declining stays strictly offline
+    val declined = container.aiBrainManager.thinkAndRespond("না", speakReply = false)
+    assertTrue(!declined.usedInternet)
+    assertTrue(declined.replyText.contains("ইন্টারনেট ব্যবহার করলাম না"))
+
+    // Asking again and granting consent prepares browser link via InternetManager
+    container.aiBrainManager.thinkAndRespond("Google-এ খুঁজে দেখো Bangladesh", speakReply = false)
+    assertTrue(container.aiBrainManager.brainState.value is AIBrainState.AwaitingInternetConsent)
+
+    val granted = container.aiBrainManager.confirmPendingInternetAccess(allowed = true)
+    assertTrue(granted.usedInternet)
+    assertTrue(granted.replyText.contains("https://"))
+    assertTrue(container.aiBrainManager.contextManager.snapshot.value.recentTurns.size >= 4)
+  }
+
+  @Test
+  fun `multi-step planning and offline AI work with zero internet`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    // Multi-step offline execution
+    val multi = container.aiBrainManager.thinkAndRespond("12 * 5 এবং কেমন আছেন অনুবাদ করো", speakReply = false)
+    assertTrue(!multi.usedInternet)
+    assertTrue(multi.replyText.contains("60"))
+    assertTrue(multi.replyText.contains("How are you?"))
+    assertTrue(container.aiBrainManager.brainState.value is AIBrainState.Responded)
+
+    // Offline time & date + reminder creation & listing + context repeat
+    val timeReply = container.aiBrainManager.thinkAndRespond("এখন কয়টা বাজে?", speakReply = false)
+    assertTrue(!timeReply.usedInternet)
+    assertTrue(timeReply.replyText.contains("স্থানীয় সময়"))
+
+    container.aiBrainManager.thinkAndRespond("রিমাইন্ডার দাও পানি খাবো", speakReply = false)
+    val listReply = container.aiBrainManager.thinkAndRespond("রিমাইন্ডার দেখাও", speakReply = false)
+    assertTrue(listReply.replyText.contains("পানি খাবো"))
+
+    val repeated = container.aiBrainManager.thinkAndRespond("আবার বলো", speakReply = false)
+    assertTrue(repeated.replyText.contains("পানি খাবো"))
+  }
+
+  @Test
+  fun `smart automation routines, daily briefing, and scheduled tasks operate offline`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    container.automationManager.scheduleTask("Project Review", "05:00 PM")
+    assertEquals(1, container.automationManager.scheduledTasks.value.size)
+
+    val briefing = container.automationManager.generateDailyBriefing(hourOfDay = 9)
+    assertTrue(briefing.greeting.contains("সুপ্রভাত"))
+    assertTrue(briefing.pendingTasksCount >= 1)
+
+    val custom =
+      container.automationManager.addCustomRoutine(
+        title = "Study Mode",
+        triggerPhrase = "পড়ার রুটিন",
+        steps = listOf("ফোকাস চালু", "নোট প্রস্তুত"),
+        scheduledTimeLabel = "08:00 PM",
+      )
+    assertTrue(container.automationManager.matchCustomRoutineByCommand("পড়ার রুটিন চালু করো")?.id == custom.id)
+
+    val nightResult = container.aiBrainManager.thinkAndRespond("রাতের রুটিন", speakReply = false)
+    assertTrue(nightResult.replyText.contains("রাতের রুটিন সম্পন্ন"))
+    assertTrue(container.permissionManager.isPrivacyLockActive())
+  }
+
+  @Test
+  fun `floating assistant lifecycle and consented update checker enforce privacy`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    // Floating assistant starts safely in minimized zero-permission in-app bubble
+    container.floatingAssistantController.toggleMinimizeRestore()
+    assertEquals(
+      com.example.overlay.FloatingBubbleMode.IN_APP_EXPANDED,
+      container.floatingAssistantController.state.value.mode,
+    )
+    container.floatingAssistantController.hideBubble()
+    assertEquals(
+      com.example.overlay.FloatingBubbleMode.HIDDEN,
+      container.floatingAssistantController.state.value.mode,
+    )
+
+    // Without explicit overlay permission, system overlay refuses and stays in safe in-app mode
+    val started = container.floatingAssistantController.startSystemOverlayIfPermitted(explicitUserRequest = true)
+    assertTrue(!started)
+
+    // Update checker requires consent before network calls & parses releases accurately
+    val blockedUpdate = kotlinx.coroutines.runBlocking {
+      container.appUpdateChecker.checkForUpdates(explicitUserConsent = false)
+    }
+    assertTrue(blockedUpdate is com.example.update.UpdateCheckState.ConsentRequired)
+
+    val available =
+      container.appUpdateChecker.parseReleaseJson(
+        """{"tag_name":"v9.9.0","html_url":"https://github.com/example/max/releases/tag/v9.9.0","body":"Faster offline brain"}""",
+      )
+    assertTrue(available is com.example.update.UpdateCheckState.UpdateAvailable)
+  }
+
+  @Test
+  fun `wake word bilingual matching and capability privacy gates hold end-to-end`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    assertTrue(!container.wakeWordManager.onKeywordMatched("maximum power", confidence = 0.99f))
+    assertTrue(container.wakeWordManager.onKeywordMatched("Hey MAX!", confidence = 0.95f))
+    assertTrue(container.wakeWordManager.onKeywordMatched("ম্যাক্স", confidence = 0.92f))
+
+    // Gallery, Files, and Camera require explicit user action and reset cleanly under privacy lock
+    assertTrue(!container.galleryManager.requestOpenGallery(explicitUserRequest = false))
+    assertTrue(container.galleryManager.requestOpenGallery(explicitUserRequest = true))
+    assertTrue(
+      container.fileManager.inspectUserSelectedFile(
+        android.net.Uri.Builder().scheme("content").authority("example").appendPath("doc.txt").build(),
+        explicitUserRequest = false,
+      ) is com.example.files.FileState.PrivacyLocked,
+    )
+
+    container.maxCore.enforcePrivacyLock()
+    assertTrue(container.galleryManager.state.value is com.example.gallery.GalleryState.PrivacyLocked)
+    assertTrue(container.fileManager.state.value is com.example.files.FileState.PrivacyLocked)
   }
 }

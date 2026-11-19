@@ -18,15 +18,22 @@ class TranslationManager {
   private val commonPhraseBank =
     mapOf(
       "কেমন আছেন" to "How are you?",
+      "কেমন আছো" to "How are you?",
       "ধন্যবাদ" to "Thank you",
       "সুপ্রভাত" to "Good morning",
       "শুভ রাত্রি" to "Good night",
       "আমি সাহায্য করতে পারি" to "I can help",
       "আসসালামু আলাইকুম" to "Peace be upon you",
+      "আমি ভালো আছি" to "I am doing well",
+      "আমার নাম সানজু" to "My name is Sanju",
+      "আজ আবহাওয়া সুন্দর" to "The weather is nice today",
+      "আল্লাহ হাফেজ" to "May Allah protect you / Goodbye",
       "how are you" to "আপনি কেমন আছেন?",
       "thank you" to "ধন্যবাদ",
       "good morning" to "সুপ্রভাত",
       "good night" to "শুভ রাত্রি",
+      "i am fine" to "আমি ভালো আছি",
+      "please help me" to "অনুগ্রহ করে আমাকে সাহায্য করুন",
     )
 
   fun translateBanglaToEnglish(text: String): String {

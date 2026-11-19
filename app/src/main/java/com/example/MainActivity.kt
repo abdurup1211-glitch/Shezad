@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -45,7 +46,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.overlay.FloatingOverlayService
 import com.example.settings.ThemeMode
+import com.example.ui.components.FloatingBubbleOverlay
 import com.example.ui.navigation.MaxDestination
 import com.example.ui.navigation.ROUTE_CORE
 import com.example.ui.navigation.ROUTE_MEMORY
@@ -57,6 +60,7 @@ import com.example.ui.screens.MemoryVaultScreen
 import com.example.ui.screens.ModulesHubScreen
 import com.example.ui.theme.MaxTheme
 import com.example.utils.ModuleDescriptor
+import com.example.viewmodel.AssistantStatus
 import com.example.viewmodel.MaxScreenState
 import com.example.viewmodel.MaxViewModel
 
@@ -70,17 +74,30 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    handleQuickVoiceIntent(intent)
     setContent {
       val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-      val themeMode =
-        (uiState as? MaxScreenState.Ready)?.dashboard?.settings?.themeMode ?: ThemeMode.SYSTEM
+      val readySettings = (uiState as? MaxScreenState.Ready)?.dashboard?.settings
+      val themeMode = readySettings?.themeMode ?: ThemeMode.SYSTEM
+      val dynamicColor = readySettings?.dynamicColorEnabled ?: true
 
-      MaxTheme(themeMode = themeMode) {
+      MaxTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
         MaxAppRoot(
           uiState = uiState,
           viewModel = viewModel,
         )
       }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handleQuickVoiceIntent(intent)
+  }
+
+  private fun handleQuickVoiceIntent(intent: Intent?) {
+    if (intent?.getBooleanExtra(FloatingOverlayService.EXTRA_QUICK_VOICE, false) == true) {
+      viewModel.setAssistantStatus(AssistantStatus.LISTENING)
     }
   }
 
@@ -223,6 +240,11 @@ fun MaxAppRoot(
                   onMicClick = viewModel::cycleAssistantStatus,
                   onSelectAssistantStatus = viewModel::setAssistantStatus,
                   onSubmitCommand = viewModel::submitCommand,
+                  onConfirmInternetConsent = viewModel::confirmBrainInternetConsent,
+                  onRunRoutine = viewModel::runRoutine,
+                  onTriggerDailyBriefing = viewModel::triggerDailyBriefing,
+                  onScheduleTask = viewModel::scheduleTask,
+                  onToggleScheduledTask = viewModel::toggleScheduledTask,
                   onCameraAction = viewModel::requestCameraConfirmation,
                   onGalleryAction = {
                     photoPickerLauncher.launch(
@@ -299,6 +321,10 @@ fun MaxAppRoot(
                   onSetMemoryEnabled = viewModel::setMemoryEnabled,
                   onSetDiagnosticsEnabled = viewModel::setDiagnosticsLoggingEnabled,
                   onSetThemeMode = viewModel::setThemeMode,
+                  onSetDynamicColorEnabled = viewModel::setDynamicColorEnabled,
+                  onSetFloatingBubbleEnabled = viewModel::setFloatingBubbleEnabled,
+                  onRequestSystemOverlay = viewModel::requestSystemOverlayEnable,
+                  onCheckForUpdates = { viewModel.checkForAppUpdates(explicitConsent = true) },
                   onResetSettings = viewModel::resetSettings,
                   onSelectLogSeverity = viewModel::setLogSeverityFilter,
                   onEmitTestLog = viewModel::emitTestDiagnostic,
@@ -309,6 +335,21 @@ fun MaxAppRoot(
           }
         }
       }
+    }
+
+    if (readyState != null) {
+      FloatingBubbleOverlay(
+        enabled = readyState.dashboard.settings.floatingBubbleEnabled,
+        state = readyState.dashboard.floatingAssistantState,
+        onToggleExpandMinimize = viewModel::toggleFloatingBubbleMode,
+        onQuickVoice = { viewModel.setAssistantStatus(AssistantStatus.LISTENING) },
+        onDailyBriefing = viewModel::triggerDailyBriefing,
+        onRequestSystemOverlay = viewModel::requestSystemOverlayEnable,
+        modifier =
+          Modifier
+            .align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = 92.dp),
+      )
     }
   }
 }

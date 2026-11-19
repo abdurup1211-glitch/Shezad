@@ -11,6 +11,13 @@ import com.example.apps.MessengerManager
 import com.example.apps.PassiveAppsModule
 import com.example.apps.WhatsAppManager
 import com.example.apps.YouTubeManager
+import com.example.automation.AutomationManager
+import com.example.brain.AIBrainManager
+import com.example.brain.ContextManager
+import com.example.brain.DecisionEngine
+import com.example.brain.IntentAnalyzer
+import com.example.brain.MultiStepPlanner
+import com.example.brain.ResponsePlanner
 import com.example.camera.CameraController
 import com.example.camera.CameraManager
 import com.example.camera.PassiveCameraModule
@@ -39,6 +46,7 @@ import com.example.internet.WebRequestManager
 import com.example.memory.InMemoryMemoryManager
 import com.example.memory.LocalMemoryRepository
 import com.example.memory.MemoryController
+import com.example.overlay.FloatingAssistantController
 import com.example.permissions.AndroidPermissionManager
 import com.example.permissions.PermissionRequestHandler
 import com.example.permissions.PrivacyController
@@ -64,6 +72,7 @@ import com.example.smart.TranslationManager
 import com.example.smart.VoiceNotesManager
 import com.example.speech.DefaultSpeechManager
 import com.example.tts.AndroidTTSManager
+import com.example.update.AppUpdateChecker
 import com.example.utils.DefaultErrorLogger
 import com.example.utils.ErrorLogger
 import com.example.wakeword.DefaultWakeWordManager
@@ -255,6 +264,72 @@ class MaxContainer(context: Context) {
     )
   }
 
+  val automationManager by lazy {
+    AutomationManager(
+      memoryManager = memoryManager,
+      reminderManager = smartFeatureManager.reminderManager,
+      permissionManager = permissionManager,
+      personalityManager = personalityManager,
+      greetingManager = greetingManager,
+      farewellManager = farewellManager,
+      errorLogger = errorLogger,
+    )
+  }
+
+  val floatingAssistantController by lazy {
+    FloatingAssistantController(
+      context = appContext,
+      errorLogger = errorLogger,
+    )
+  }
+
+  val appUpdateChecker by lazy {
+    AppUpdateChecker(
+      context = appContext,
+      errorLogger = errorLogger,
+    )
+  }
+
+  val intentAnalyzer by lazy { IntentAnalyzer() }
+
+  val contextManager by lazy { ContextManager() }
+
+  val decisionEngine by lazy { DecisionEngine(memoryManager) }
+
+  val multiStepPlanner by lazy { MultiStepPlanner() }
+
+  val responsePlanner by lazy {
+    ResponsePlanner(
+      emotionManager = emotionManager,
+      personalityManager = personalityManager,
+      greetingManager = greetingManager,
+      farewellManager = farewellManager,
+    )
+  }
+
+  val aiBrainManager by lazy {
+    AIBrainManager(
+      intentAnalyzer = intentAnalyzer,
+      contextManager = contextManager,
+      decisionEngine = decisionEngine,
+      responsePlanner = responsePlanner,
+      multiStepPlanner = multiStepPlanner,
+      conversationManager = conversationManager,
+      emotionManager = emotionManager,
+      memoryManager = memoryManager,
+      memoryController = memoryController,
+      automationManager = automationManager,
+      floatingAssistantController = floatingAssistantController,
+      internetManager = internetManager,
+      smartFeatureManager = smartFeatureManager,
+      phoneManager = phoneManager,
+      appManager = appManager,
+      ttsManager = ttsManager,
+      settingsManager = settingsManager,
+      errorLogger = errorLogger,
+    )
+  }
+
   val maxCore: MAXCore by lazy {
     MAXCore(
       settingsManager = settingsManager,
@@ -271,6 +346,10 @@ class MaxContainer(context: Context) {
       conversationManager = conversationManager,
       emotionAnalyzer = emotionAnalyzer,
       emotionManager = emotionManager,
+      aiBrainManager = aiBrainManager,
+      automationManager = automationManager,
+      floatingAssistantController = floatingAssistantController,
+      appUpdateChecker = appUpdateChecker,
       serviceController = serviceController,
       cameraCapability = cameraCapability,
       cameraManager = cameraManager,

@@ -2,7 +2,8 @@ package com.example.core
 
 import com.example.apps.AppLauncherCapability
 import com.example.apps.AppManager
-import com.example.apps.AppState
+import com.example.automation.AutomationManager
+import com.example.brain.AIBrainManager
 import com.example.camera.CameraCapability
 import com.example.camera.CameraManager
 import com.example.conversation.ConversationEngine
@@ -13,12 +14,11 @@ import com.example.files.FileAccessCapability
 import com.example.files.FileManager
 import com.example.gallery.GalleryCapability
 import com.example.gallery.GalleryManager
-import com.example.internet.InternetActionOutcome
 import com.example.internet.InternetManager
 import com.example.internet.NetworkCapability
-import com.example.memory.MemoryCommandResult
 import com.example.memory.MemoryController
 import com.example.memory.MemoryManager
+import com.example.overlay.FloatingAssistantController
 import com.example.permissions.PermissionManager
 import com.example.permissions.PermissionRequestHandler
 import com.example.permissions.PrivacyController
@@ -29,6 +29,7 @@ import com.example.settings.SettingsManager
 import com.example.smart.SmartFeatureManager
 import com.example.speech.SpeechManager
 import com.example.tts.TTSManager
+import com.example.update.AppUpdateChecker
 import com.example.utils.ErrorLogger
 import com.example.utils.MaxModule
 import com.example.utils.ModuleCategory
@@ -85,6 +86,10 @@ class MAXCore(
   val conversationManager: ConversationManager,
   val emotionAnalyzer: EmotionAnalyzer,
   val emotionManager: EmotionManager,
+  val aiBrainManager: AIBrainManager,
+  val automationManager: AutomationManager,
+  val floatingAssistantController: FloatingAssistantController,
+  val appUpdateChecker: AppUpdateChecker,
   val serviceController: AssistantServiceController,
   val cameraCapability: CameraCapability,
   val cameraManager: CameraManager,
@@ -117,7 +122,7 @@ class MAXCore(
             MaxLifecycleState.UNINITIALIZED, MaxLifecycleState.INITIALIZING -> ModuleStatus.STANDBY
             MaxLifecycleState.ERROR -> ModuleStatus.ERROR
           },
-        summary = "Central orchestrator linking all 21 MAX subsystems.",
+        summary = "Central orchestrator linking all MAX subsystems.",
       )
 
   private val allManagedModules: List<MaxModule>
@@ -134,6 +139,10 @@ class MAXCore(
         conversationManager,
         emotionAnalyzer,
         emotionManager,
+        aiBrainManager,
+        automationManager,
+        floatingAssistantController,
+        appUpdateChecker,
         serviceController,
         cameraCapability,
         cameraManager,
@@ -227,8 +236,9 @@ class MAXCore(
   }
 
   /**
-   * Unified user command router across Memory, Apps, Internet, Calculator, Smart Features,
-   * and Conversation Engine—never executes sensitive actions unless [explicitUserRequest] is true.
+   * Unified user command router backed by [AIBrainManager] so MAX thinks before responding,
+   * combines Memory/Emotion/Conversation/Smart tools offline first, asks follow-up questions,
+   * and always asks permission before using InternetManager.
    */
   fun processUserCommand(
     command: String,
@@ -237,83 +247,14 @@ class MAXCore(
     val trimmed = command.trim()
     if (trimmed.isEmpty()) return ""
 
-    emotionManager.evaluateUserMood(trimmed)
-
-    // 1. Check Memory Commands
-    val memoryResult = memoryController.processCommand(trimmed)
-    if (memoryResult is MemoryCommandResult.Handled) {
-      conversationManager.handleUserInput(trimmed, memoryResult.replyBangla)
-      conversationManager.completeTaskAndAskFollowUp("মেমোরি আপডেট", speakPrompt = false)
-      refreshRegistry()
-      return memoryResult.replyBangla
-    }
-
-    // 2. Check App Control Commands
-    val appState = appManager.handleVoiceCommand(trimmed, explicitUserRequest)
-    if (appState != null) {
-      val reply =
-        when (appState) {
-          is AppState.LaunchReady ->
-            "${conversationManager.personalityManager.userNameBangla}, ${appState.app.displayName} খোলার জন্য প্রস্তুত।"
-          is AppState.NotInstalled -> appState.suggestion
-          is AppState.ConfirmationRequired -> appState.detail
-          AppState.Standby -> "অ্যাপ স্ট্যান্ডবাই।"
-        }
-      conversationManager.handleUserInput(trimmed, reply)
-      refreshRegistry()
-      return reply
-    }
-
-    // 3. Check Internet / Browser / Search Commands
-    val lower = trimmed.lowercase()
-    if (lower.contains("google") || lower.contains("খুঁজে") || lower.contains("youtube") ||
-      lower.contains("সংক্ষেপে") || lower.contains("আবহাওয়া") || lower.contains("wikipedia")
-    ) {
-      val outcome = internetManager.handleVoiceCommand(trimmed, explicitUserRequest)
-      val reply =
-        when (outcome) {
-          is InternetActionOutcome.ReadyBrowser -> "অনুসন্ধানের লিংক প্রস্তুত: ${outcome.url}"
-          is InternetActionOutcome.Summary -> outcome.summaryText
-          is InternetActionOutcome.Blocked -> outcome.message
-        }
-      conversationManager.handleUserInput(trimmed, reply)
-      refreshRegistry()
-      return reply
-    }
-
-    // 4. Check Calculator Arithmetic Expressions
-    if (trimmed.any { it.isDigit() } && trimmed.any { it in listOf('+', '-', '*', '/', '×', '÷') }) {
-      val calc = phoneManager.calculate(trimmed, explicitUserRequest)
-      if (calc != null) {
-        val reply = "${calc.expression} = ${calc.result}"
-        conversationManager.handleUserInput(trimmed, reply)
-        conversationManager.completeTaskAndAskFollowUp("হিসাব ($reply)", speakPrompt = false)
-        refreshRegistry()
-        return reply
-      }
-    }
-
-    // 5. Smart Features (Translation, Reminder, Notes, Calendar)
-    if (lower.contains("অনুবাদ") || lower.contains("translate") || lower.contains("রিমাইন্ডার") ||
-      lower.contains("reminder") || lower.contains("নোট") || lower.contains("note") ||
-      lower.contains("ক্যালেন্ডার") || lower.contains("calendar")
-    ) {
-      val reply =
-        smartFeatureManager.handleSmartCommand(
-          command = trimmed,
-          speakResult = settingsManager.settings.value.ttsEnabled,
-        )
-      conversationManager.handleUserInput(trimmed, reply)
-      conversationManager.completeTaskAndAskFollowUp("স্মার্ট টাস্ক", speakPrompt = false)
-      refreshRegistry()
-      return reply
-    }
-
-    // 6. General respectful conversation fallback
-    conversationManager.handleUserInput(trimmed)
-    val latest = conversationManager.transcript.value.lastOrNull()?.text.orEmpty()
+    val brainResponse =
+      aiBrainManager.thinkAndRespond(
+        rawInput = trimmed,
+        explicitUserRequest = explicitUserRequest,
+        speakReply = settingsManager.settings.value.ttsEnabled,
+      )
     refreshRegistry()
-    return latest
+    return brainResponse.replyText
   }
 
   /**
@@ -354,7 +295,9 @@ class MAXCore(
     galleryManager.clearSelection()
     phoneManager.releaseResources()
     fileManager.lockFiles()
+    floatingAssistantController.stopSystemOverlay()
     conversationManager.returnToWakeMode()
+    aiBrainManager.resetContext()
     errorLogger.logInfo("MAXCore", "Strict privacy lock enforced across all subsystems.")
     refreshRegistry(
       lifecycle = MaxLifecycleState.PRIVACY_LOCKED,
@@ -393,7 +336,7 @@ class MAXCore(
    * Reduces non-essential in-memory caches under system low-memory pressure.
    */
   fun onTrimMemory(level: Int) {
-    if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+    if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
       errorLogger.trimToRecent(keepCount = 20)
       releaseTransientResources()
     }
@@ -406,6 +349,8 @@ class MAXCore(
     ttsManager.shutdown()
     cameraManager.releaseResources()
     phoneManager.releaseResources()
+    floatingAssistantController.stopSystemOverlay()
+    aiBrainManager.resetContext()
     serviceController.markStopped()
     errorLogger.logInfo("MAXCore", "MAX Core shut down cleanly.")
   }

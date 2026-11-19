@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -39,6 +40,7 @@ import com.example.permissions.PermissionState
 import com.example.settings.ThemeMode
 import com.example.ui.theme.MaxMonoBodyStyle
 import com.example.ui.theme.MaxMonoLabelStyle
+import com.example.update.UpdateCheckState
 import com.example.utils.ErrorLogEntry
 import com.example.utils.LogSeverity
 import com.example.viewmodel.MaxDashboardData
@@ -56,6 +58,10 @@ fun DiagnosticsSettingsScreen(
   onSetMemoryEnabled: (Boolean) -> Unit,
   onSetDiagnosticsEnabled: (Boolean) -> Unit,
   onSetThemeMode: (ThemeMode) -> Unit,
+  onSetDynamicColorEnabled: (Boolean) -> Unit,
+  onSetFloatingBubbleEnabled: (Boolean) -> Unit,
+  onRequestSystemOverlay: () -> Unit,
+  onCheckForUpdates: () -> Unit,
   onResetSettings: () -> Unit,
   onSelectLogSeverity: (LogSeverity?) -> Unit,
   onEmitTestLog: () -> Unit,
@@ -169,6 +175,36 @@ fun DiagnosticsSettingsScreen(
           )
 
           SettingToggleRow(
+            title = "Material You Dynamic Color",
+            subtitle = "Adapts palette to Android 12+ wallpaper (offline).",
+            checked = data.settings.dynamicColorEnabled,
+            onCheckedChange = onSetDynamicColorEnabled,
+            testTag = "switch_dynamic_color",
+          )
+
+          SettingToggleRow(
+            title = "Floating Assistant Bubble",
+            subtitle = "Shows quick minimize/restore voice bubble inside MAX.",
+            checked = data.settings.floatingBubbleEnabled,
+            onCheckedChange = onSetFloatingBubbleEnabled,
+            testTag = "switch_floating_bubble",
+          )
+
+          OutlinedButton(
+            onClick = onRequestSystemOverlay,
+            modifier =
+              Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("enable_system_overlay_button"),
+          ) {
+            Text(
+              if (data.floatingAssistantState.hasOverlayPermission) {
+                "Launch System Floating Overlay"
+              } else {
+                "Enable System Overlay Permission"
+              },
+            )
+          }
+
+          SettingToggleRow(
             title = "ErrorLogger Telemetry",
             subtitle = "Captures structured subsystem diagnostics in memory.",
             checked = data.settings.diagnosticsLoggingEnabled,
@@ -181,6 +217,51 @@ fun DiagnosticsSettingsScreen(
             modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("reset_settings_button"),
           ) {
             Text("Restore Privacy-First Defaults")
+          }
+        }
+      }
+    }
+
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text(
+            text = "Production Release & Update Check",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = data.currentVersionLabel,
+            style = MaxMonoLabelStyle,
+            color = MaterialTheme.colorScheme.primary,
+          )
+          val updateStatusText =
+            when (val status = data.updateCheckState) {
+              UpdateCheckState.Idle -> "Offline by default. Tap below to check for updates explicitly."
+              UpdateCheckState.ConsentRequired -> "Explicit user consent is required before connecting."
+              UpdateCheckState.Checking -> "Checking release metadata securely via HTTPS…"
+              is UpdateCheckState.UpToDate -> "You are running the latest build (${status.currentVersionName})."
+              is UpdateCheckState.UpdateAvailable -> "New release v${status.latestVersionName} available."
+              is UpdateCheckState.Error -> status.friendlyMessage
+            }
+          Text(
+            text = updateStatusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Button(
+            onClick = onCheckForUpdates,
+            modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("check_updates_button"),
+          ) {
+            Text("Check for Updates (Consented)")
           }
         }
       }
@@ -269,6 +350,7 @@ fun DiagnosticsSettingsScreen(
               selected = data.selectedLogSeverity == null,
               onClick = { onSelectLogSeverity(null) },
               label = { Text("All") },
+              modifier = Modifier.minimumInteractiveComponentSize(),
             )
           }
           items(LogSeverity.entries) { severity ->
@@ -278,6 +360,7 @@ fun DiagnosticsSettingsScreen(
                 onSelectLogSeverity(if (data.selectedLogSeverity == severity) null else severity)
               },
               label = { Text(severity.name) },
+              modifier = Modifier.minimumInteractiveComponentSize(),
             )
           }
         }
@@ -356,7 +439,9 @@ private fun LogEntryCard(
   modifier: Modifier = Modifier,
 ) {
   val formattedTime =
-    SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(entry.timestampMillis))
+    androidx.compose.runtime.remember(entry.timestampMillis) {
+      SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(entry.timestampMillis))
+    }
   Card(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(14.dp),

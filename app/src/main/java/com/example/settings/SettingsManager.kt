@@ -52,6 +52,8 @@ data class MaxSettings(
   val privacySafeMode: Boolean = true,
   val diagnosticsLoggingEnabled: Boolean = true,
   val themeMode: ThemeMode = ThemeMode.SYSTEM,
+  val dynamicColorEnabled: Boolean = true,
+  val floatingBubbleEnabled: Boolean = true,
 )
 
 /**
@@ -75,6 +77,10 @@ interface SettingsManager : MaxModule {
   suspend fun setDiagnosticsLoggingEnabled(enabled: Boolean)
 
   suspend fun setThemeMode(mode: ThemeMode)
+
+  suspend fun setDynamicColorEnabled(enabled: Boolean)
+
+  suspend fun setFloatingBubbleEnabled(enabled: Boolean)
 
   suspend fun resetToDefaults()
 }
@@ -161,6 +167,14 @@ class DataStoreSettingsManager(
     updatePreference { it[Keys.THEME_MODE] = mode.name }
   }
 
+  override suspend fun setDynamicColorEnabled(enabled: Boolean) {
+    updatePreference { it[Keys.DYNAMIC_COLOR_ENABLED] = enabled }
+  }
+
+  override suspend fun setFloatingBubbleEnabled(enabled: Boolean) {
+    updatePreference { it[Keys.FLOATING_BUBBLE_ENABLED] = enabled }
+  }
+
   override suspend fun resetToDefaults() {
     runCatching {
       dataStore.edit { it.clear() }
@@ -194,6 +208,8 @@ class DataStoreSettingsManager(
       privacySafeMode = this[Keys.PRIVACY_SAFE_MODE] ?: true,
       diagnosticsLoggingEnabled = this[Keys.DIAGNOSTICS_ENABLED] ?: true,
       themeMode = parsedTheme,
+      dynamicColorEnabled = this[Keys.DYNAMIC_COLOR_ENABLED] ?: true,
+      floatingBubbleEnabled = this[Keys.FLOATING_BUBBLE_ENABLED] ?: true,
     )
   }
 
@@ -207,5 +223,7 @@ class DataStoreSettingsManager(
     val PRIVACY_SAFE_MODE = booleanPreferencesKey("privacy_safe_mode")
     val DIAGNOSTICS_ENABLED = booleanPreferencesKey("diagnostics_enabled")
     val THEME_MODE = stringPreferencesKey("theme_mode")
+    val DYNAMIC_COLOR_ENABLED = booleanPreferencesKey("dynamic_color_enabled")
+    val FLOATING_BUBBLE_ENABLED = booleanPreferencesKey("floating_bubble_enabled")
   }
 }

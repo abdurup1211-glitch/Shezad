@@ -877,14 +877,15 @@ fun iconForModule(moduleId: String): ImageVector =
     "speech_manager" -> Icons.Filled.Mic
     "tts_manager" -> Icons.Filled.RecordVoiceOver
     "memory_manager" -> Icons.Filled.Memory
-    "conversation_engine" -> Icons.Filled.SmartToy
-    "emotion_analyzer" -> Icons.Filled.SentimentSatisfied
-    "assistant_service" -> Icons.Filled.VerifiedUser
-    "camera_module" -> Icons.Filled.CameraAlt
-    "gallery_module" -> Icons.Filled.PhotoLibrary
-    "internet_module" -> Icons.Filled.Public
-    "phone_module" -> Icons.Filled.Phone
-    "apps_module" -> Icons.Filled.Apps
-    "files_module" -> Icons.Filled.Folder
+    "conversation_engine", "conversation_manager", "ai_brain_manager" -> Icons.Filled.SmartToy
+    "emotion_analyzer", "emotion_manager" -> Icons.Filled.SentimentSatisfied
+    "automation_manager", "smart_feature_manager", "floating_assistant_controller" -> Icons.Filled.AutoAwesome
+    "assistant_service", "app_update_checker" -> Icons.Filled.VerifiedUser
+    "camera_module", "camera_manager" -> Icons.Filled.CameraAlt
+    "gallery_module", "gallery_manager" -> Icons.Filled.PhotoLibrary
+    "internet_module", "internet_manager" -> Icons.Filled.Public
+    "phone_module", "phone_manager" -> Icons.Filled.Phone
+    "apps_module", "app_manager" -> Icons.Filled.Apps
+    "files_module", "file_manager" -> Icons.Filled.Folder
     else -> Icons.Filled.BugReport
   }
