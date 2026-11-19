@@ -569,18 +569,28 @@ class MaxViewModel(
   }
 
   fun requestSystemOverlayEnable() {
+    if (!repository.isSystemOverlaySupported()) {
+      recordCompletedTask("System overlay unavailable on this device/OS; using in-app bubble")
+      setFeedback("System floating overlay unavailable on this device/OS; using in-app bubble.")
+      return
+    }
     val started = repository.startSystemOverlayIfPermitted()
     if (!started) {
       val settingsIntent = repository.buildOverlayPermissionSettingsIntent()
-      filterPreferences.value =
-        filterPreferences.value.copy(
-          pendingConfirmation =
-            PendingConfirmationAction(
-              title = "System Floating Overlay Permission",
-              description = "অন্য অ্যাপের ওপর ফ্লোটিং বাবল চালাতে 'Display over other apps' অনুমতি দিন, অথবা ইন-অ্যাপ ফ্লোটিং বাবল ব্যবহার করুন।",
-              intent = settingsIntent,
-            ),
-        )
+      if (settingsIntent != null) {
+        filterPreferences.value =
+          filterPreferences.value.copy(
+            pendingConfirmation =
+              PendingConfirmationAction(
+                title = "System Floating Overlay Permission",
+                description = "অন্য অ্যাপের ওপর ফ্লোটিং বাবল চালাতে 'Display over other apps' অনুমতি দিন, অথবা ইন-অ্যাপ ফ্লোটিং বাবল ব্যবহার করুন।",
+                intent = settingsIntent,
+              ),
+          )
+      } else {
+        recordCompletedTask("Overlay permission settings unavailable; keeping in-app bubble")
+        setFeedback("System overlay permission screen unavailable on this device; continuing with in-app floating bubble.")
+      }
     } else {
       recordCompletedTask("Enabled system-wide MAX floating bubble")
       setFeedback("Floating overlay bubble active.")

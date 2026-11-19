@@ -1,11 +1,14 @@
 package com.example.overlay
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -19,16 +22,18 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.R
 
 /**
  * Lightweight, low-RAM Android 8.0+ (API 26+) Floating Assistant Overlay Service.
  *
- * Strictly privacy-safe:
+ * Strictly privacy-safe & policy-compliant:
+ * - Requires Android 8.0+ (`TYPE_APPLICATION_OVERLAY`) and non-low-RAM hardware.
  * - Never activates microphone, camera, or hidden audio capture from the service.
- * - Attaches overlay only when [Settings.canDrawOverlays] is already granted by the user.
- * - Restores [MainActivity] with quick voice intent on tap, supports minimize/restore & dismiss.
+ * - Attaches overlay only when [Settings.canDrawOverlays] is granted by the user.
+ * - Handles WindowManager and Android 12+ foreground-service constraints gracefully without crashing.
  */
 class FloatingOverlayService : Service() {
 
@@ -40,6 +45,10 @@ class FloatingOverlayService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    if (!isOverlaySupportedOnDevice()) {
+      stopSelf()
+      return
+    }
     ensureNotificationChannel()
   }
 
@@ -47,6 +56,7 @@ class FloatingOverlayService : Service() {
     when (intent?.action) {
       ACTION_STOP -> {
         removeOverlayView()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         return START_NOT_STICKY
       }
@@ -59,11 +69,16 @@ class FloatingOverlayService : Service() {
         refreshBubbleUi()
       }
       else -> {
-        if (!canDrawOverlay()) {
+        if (!isOverlaySupportedOnDevice() || !canDrawOverlay()) {
+          removeOverlayView()
           stopSelf()
           return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, buildPersistentNotification())
+        val startedForeground = startForegroundSafely()
+        if (!startedForeground) {
+          stopSelf()
+          return START_NOT_STICKY
+        }
         attachOverlayBubbleIfNeeded()
       }
     }
@@ -72,11 +87,34 @@ class FloatingOverlayService : Service() {
 
   override fun onDestroy() {
     removeOverlayView()
+    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     super.onDestroy()
   }
 
+  private fun isOverlaySupportedOnDevice(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+    val am = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+    if (am != null && am.isLowRamDevice) return false
+    if (packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) return false
+    return getSystemService(WINDOW_SERVICE) is WindowManager
+  }
+
   private fun canDrawOverlay(): Boolean =
-    runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+      runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false)
+
+  private fun startForegroundSafely(): Boolean =
+    runCatching {
+      val notification = buildPersistentNotification()
+      val serviceType =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        } else {
+          0
+        }
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
+      true
+    }.getOrDefault(false)
 
   private fun ensureNotificationChannel() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -132,22 +170,18 @@ class FloatingOverlayService : Service() {
 
   private fun attachOverlayBubbleIfNeeded() {
     if (overlayContainer != null) return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      stopSelf()
+      return
+    }
     val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return
     windowManager = wm
-
-    val layoutType =
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-      } else {
-        @Suppress("DEPRECATION")
-        WindowManager.LayoutParams.TYPE_PHONE
-      }
 
     val params =
       WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
-        layoutType,
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
         PixelFormat.TRANSLUCENT,
       ).apply {
@@ -227,6 +261,7 @@ class FloatingOverlayService : Service() {
         visibility = if (isMinimizedBubble) View.GONE else View.VISIBLE
         setOnClickListener {
           removeOverlayView()
+          ServiceCompat.stopForeground(this@FloatingOverlayService, ServiceCompat.STOP_FOREGROUND_REMOVE)
           stopSelf()
         }
       }
@@ -287,7 +322,13 @@ class FloatingOverlayService : Service() {
 
   private fun removeOverlayView() {
     overlayContainer?.let { view ->
-      runCatching { windowManager?.removeView(view) }
+      runCatching {
+        if (view.isAttachedToWindow) {
+          windowManager?.removeViewImmediate(view)
+        } else {
+          windowManager?.removeView(view)
+        }
+      }
     }
     overlayContainer = null
   }

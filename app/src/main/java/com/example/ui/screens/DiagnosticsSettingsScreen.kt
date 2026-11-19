@@ -192,14 +192,18 @@ fun DiagnosticsSettingsScreen(
 
           OutlinedButton(
             onClick = onRequestSystemOverlay,
+            enabled = data.floatingAssistantState.systemOverlaySupported,
             modifier =
               Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("enable_system_overlay_button"),
           ) {
             Text(
-              if (data.floatingAssistantState.hasOverlayPermission) {
-                "Launch System Floating Overlay"
-              } else {
-                "Enable System Overlay Permission"
+              when {
+                !data.floatingAssistantState.systemOverlaySupported ->
+                  "System Overlay Unavailable on This Device"
+                data.floatingAssistantState.hasOverlayPermission ->
+                  "Launch System Floating Overlay"
+                else ->
+                  "Enable System Overlay Permission"
               },
             )
           }

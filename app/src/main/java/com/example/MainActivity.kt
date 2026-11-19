@@ -101,6 +101,11 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  override fun onResume() {
+    super.onResume()
+    (application as? MaxApplication)?.container?.floatingAssistantController?.refreshOverlayPermission()
+  }
+
   override fun onStop() {
     super.onStop()
     (application as? MaxApplication)?.let { app ->

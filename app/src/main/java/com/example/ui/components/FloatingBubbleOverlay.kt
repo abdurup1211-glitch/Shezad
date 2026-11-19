@@ -198,13 +198,14 @@ fun FloatingBubbleOverlay(
 
               OutlinedButton(
                 onClick = onRequestSystemOverlay,
+                enabled = state.systemOverlaySupported,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                 modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("floating_overlay_button"),
               ) {
                 Icon(imageVector = Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                 Text(
-                  text = " Overlay",
+                  text = if (state.systemOverlaySupported) " Overlay" else " In-App Only",
                   style = MaterialTheme.typography.labelMedium,
                   maxLines = 1,
                   softWrap = false,

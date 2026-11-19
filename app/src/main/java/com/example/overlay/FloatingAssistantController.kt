@@ -1,9 +1,12 @@
 package com.example.overlay
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.net.toUri
 import com.example.utils.ErrorLogger
 import com.example.utils.MaxModule
@@ -31,6 +34,7 @@ enum class FloatingBubbleMode {
 data class FloatingAssistantState(
   val mode: FloatingBubbleMode = FloatingBubbleMode.IN_APP_MINIMIZED,
   val hasOverlayPermission: Boolean = false,
+  val systemOverlaySupported: Boolean = true,
   val offsetXFraction: Float = 0.82f,
   val offsetYFraction: Float = 0.72f,
   val statusMessage: String = "In-app floating assistant ready (zero-permission).",
@@ -38,8 +42,8 @@ data class FloatingAssistantState(
 
 /**
  * Coordinates both MAX's zero-permission in-app Floating Bubble (minimize/restore/quick-voice)
- * and the optional Android 8+ System Overlay Service ([FloatingOverlayService]) gated behind
- * explicit user opt-in and [Settings.canDrawOverlays].
+ * and the optional Android 8.0+ System Overlay Service ([FloatingOverlayService]) gated behind
+ * device capability checks, explicit user opt-in, and [Settings.canDrawOverlays].
  */
 class FloatingAssistantController(
   private val context: Context,
@@ -52,6 +56,7 @@ class FloatingAssistantController(
     MutableStateFlow(
       FloatingAssistantState(
         hasOverlayPermission = checkSystemOverlayPermission(),
+        systemOverlaySupported = isSystemOverlaySupported(),
       ),
     )
   val state: StateFlow<FloatingAssistantState> = _state.asStateFlow()
@@ -64,22 +69,47 @@ class FloatingAssistantController(
         packageName = "com.example.overlay",
         category = ModuleCategory.CORE_ORCHESTRATION,
         status =
-          when (_state.value.mode) {
-            FloatingBubbleMode.HIDDEN -> ModuleStatus.STANDBY
+          when {
+            !_state.value.systemOverlaySupported && _state.value.mode == FloatingBubbleMode.HIDDEN ->
+              ModuleStatus.DISABLED
+            _state.value.mode == FloatingBubbleMode.HIDDEN -> ModuleStatus.STANDBY
             else -> ModuleStatus.READY
           },
-        summary = "Floating bubble, minimize/restore quick voice & optional overlay service.",
+        summary = "Floating bubble, minimize/restore quick voice & optional Android 8+ overlay service.",
         privacyGuarded = true,
       )
 
+  /**
+   * System-wide `TYPE_APPLICATION_OVERLAY` requires Android 8.0+ (API 26+), WindowManager
+   * availability, non-Wear form factor, and non-Android Go (low-RAM) hardware.
+   */
+  fun isSystemOverlaySupported(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+    val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    if (activityManager != null && activityManager.isLowRamDevice) return false
+    if (appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) return false
+    return appContext.getSystemService(Context.WINDOW_SERVICE) is WindowManager
+  }
+
   fun refreshOverlayPermission(): Boolean {
-    val granted = checkSystemOverlayPermission()
-    _state.update { it.copy(hasOverlayPermission = granted) }
+    val supported = isSystemOverlaySupported()
+    val granted = if (supported) checkSystemOverlayPermission() else false
+    if (!supported && _state.value.mode == FloatingBubbleMode.SYSTEM_OVERLAY_ACTIVE) {
+      stopSystemOverlay()
+    }
+    _state.update {
+      it.copy(
+        hasOverlayPermission = granted,
+        systemOverlaySupported = supported,
+      )
+    }
     return granted
   }
 
-  fun checkSystemOverlayPermission(): Boolean =
-    runCatching { Settings.canDrawOverlays(appContext) }.getOrDefault(false)
+  fun checkSystemOverlayPermission(): Boolean {
+    if (!isSystemOverlaySupported()) return false
+    return runCatching { Settings.canDrawOverlays(appContext) }.getOrDefault(false)
+  }
 
   fun showMinimizedBubble() {
     _state.update {
@@ -129,11 +159,27 @@ class FloatingAssistantController(
   }
 
   /**
-   * Starts [FloatingOverlayService] ONLY if user explicitly opted in AND system overlay
-   * permission is granted; otherwise stays safely in zero-permission in-app bubble mode.
+   * Starts [FloatingOverlayService] ONLY if device supports Android 8.0+ overlays, user
+   * explicitly opted in, and [Settings.canDrawOverlays] is granted; otherwise disables or keeps
+   * the zero-permission in-app bubble safely active.
    */
   fun startSystemOverlayIfPermitted(explicitUserRequest: Boolean): Boolean {
+    val supported = isSystemOverlaySupported()
     val granted = refreshOverlayPermission()
+    if (!supported) {
+      stopSystemOverlay()
+      _state.update {
+        it.copy(
+          mode = FloatingBubbleMode.IN_APP_MINIMIZED,
+          systemOverlaySupported = false,
+          hasOverlayPermission = false,
+          statusMessage = "এই ডিভাইস বা অ্যান্ড্রয়েড সংস্করণে সিস্টেম ওভারলে অনুপলব্ধ—ইন-অ্যাপ বাবল সক্রিয় আছে।",
+        )
+      }
+      errorLogger.logInfo("FloatingAssistant", "System overlay unavailable on this device/OS; using in-app bubble.")
+      return false
+    }
+
     if (!explicitUserRequest || !granted) {
       _state.update {
         it.copy(
@@ -155,12 +201,12 @@ class FloatingAssistantController(
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         appContext.startForegroundService(intent)
-      } else {
-        appContext.startService(intent)
       }
       _state.update {
         it.copy(
           mode = FloatingBubbleMode.SYSTEM_OVERLAY_ACTIVE,
+          systemOverlaySupported = true,
+          hasOverlayPermission = true,
           statusMessage = "System floating assistant overlay active.",
         )
       }
@@ -192,11 +238,15 @@ class FloatingAssistantController(
     }
   }
 
-  fun buildOverlayPermissionSettingsIntent(): Intent =
-    Intent(
-      Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-      "package:${appContext.packageName}".toUri(),
-    ).apply {
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
+  fun buildOverlayPermissionSettingsIntent(): Intent? {
+    if (!isSystemOverlaySupported()) return null
+    val intent =
+      Intent(
+        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        "package:${appContext.packageName}".toUri(),
+      ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+    return if (intent.resolveActivity(appContext.packageManager) != null) intent else null
+  }
 }

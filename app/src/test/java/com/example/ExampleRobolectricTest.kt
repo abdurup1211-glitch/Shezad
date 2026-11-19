@@ -269,4 +269,94 @@ class ExampleRobolectricTest {
     assertTrue(container.galleryManager.state.value is com.example.gallery.GalleryState.PrivacyLocked)
     assertTrue(container.fileManager.state.value is com.example.files.FileState.PrivacyLocked)
   }
+
+  @Test
+  @Config(sdk = [24])
+  fun `system overlay is gracefully disabled below Android 8_0`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val container = MaxContainer(context)
+    container.maxCore.initialize()
+
+    val controller = container.floatingAssistantController
+    assertTrue(!controller.isSystemOverlaySupported())
+    assertTrue(!controller.state.value.systemOverlaySupported)
+    assertTrue(!controller.checkSystemOverlayPermission())
+    assertTrue(!controller.startSystemOverlayIfPermitted(explicitUserRequest = true))
+    assertEquals(null, controller.buildOverlayPermissionSettingsIntent())
+    assertEquals(
+      com.example.overlay.FloatingBubbleMode.IN_APP_MINIMIZED,
+      controller.state.value.mode,
+    )
+  }
+
+  @Test
+  fun `system overlay is gracefully disabled on low-RAM Android Go and Wear devices`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+    org.robolectric.Shadows.shadowOf(activityManager).setIsLowRamDevice(true)
+
+    val lowRamContainer = MaxContainer(context)
+    assertTrue(!lowRamContainer.floatingAssistantController.isSystemOverlaySupported())
+    assertTrue(!lowRamContainer.floatingAssistantController.refreshOverlayPermission())
+    assertTrue(!lowRamContainer.floatingAssistantController.startSystemOverlayIfPermitted(explicitUserRequest = true))
+
+    org.robolectric.Shadows.shadowOf(activityManager).setIsLowRamDevice(false)
+    org.robolectric.Shadows.shadowOf(context.packageManager)
+      .setSystemFeature(android.content.pm.PackageManager.FEATURE_WATCH, true)
+
+    val watchContainer = MaxContainer(context)
+    assertTrue(!watchContainer.floatingAssistantController.isSystemOverlaySupported())
+    assertTrue(!watchContainer.floatingAssistantController.startSystemOverlayIfPermitted(explicitUserRequest = true))
+  }
+
+  @Test
+  fun `system overlay starts cleanly on Android 8_0+ when SYSTEM_ALERT_WINDOW is granted`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(true)
+    try {
+      val container = MaxContainer(context)
+      val controller = container.floatingAssistantController
+      assertTrue(controller.isSystemOverlaySupported())
+      assertTrue(controller.checkSystemOverlayPermission())
+      assertTrue(controller.startSystemOverlayIfPermitted(explicitUserRequest = true))
+      assertEquals(
+        com.example.overlay.FloatingBubbleMode.SYSTEM_OVERLAY_ACTIVE,
+        controller.state.value.mode,
+      )
+
+      controller.stopSystemOverlay()
+      assertEquals(
+        com.example.overlay.FloatingBubbleMode.IN_APP_MINIMIZED,
+        controller.state.value.mode,
+      )
+    } finally {
+      org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(false)
+    }
+  }
+
+  @Test
+  fun `FloatingOverlayService handles missing permission and ACTION_STOP without crashing`() {
+    org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(false)
+    val showIntent =
+      android.content.Intent(
+        ApplicationProvider.getApplicationContext(),
+        com.example.overlay.FloatingOverlayService::class.java,
+      ).apply {
+        action = com.example.overlay.FloatingOverlayService.ACTION_SHOW
+      }
+    val serviceController =
+      org.robolectric.Robolectric.buildService(com.example.overlay.FloatingOverlayService::class.java, showIntent)
+        .create()
+        .startCommand(0, 1)
+
+    val stopIntent =
+      android.content.Intent(
+        ApplicationProvider.getApplicationContext(),
+        com.example.overlay.FloatingOverlayService::class.java,
+      ).apply {
+        action = com.example.overlay.FloatingOverlayService.ACTION_STOP
+      }
+    serviceController.get().onStartCommand(stopIntent, 0, 2)
+    serviceController.destroy()
+  }
 }

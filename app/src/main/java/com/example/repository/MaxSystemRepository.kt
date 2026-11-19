@@ -215,6 +215,12 @@ class MaxSystemRepository(
     maxCore.floatingAssistantController.toggleMinimizeRestore()
   }
 
+  fun isSystemOverlaySupported(): Boolean =
+    maxCore.floatingAssistantController.isSystemOverlaySupported()
+
+  fun refreshOverlayPermission(): Boolean =
+    maxCore.floatingAssistantController.refreshOverlayPermission()
+
   fun startSystemOverlayIfPermitted(): Boolean =
     maxCore.floatingAssistantController.startSystemOverlayIfPermitted(explicitUserRequest = true)
 
